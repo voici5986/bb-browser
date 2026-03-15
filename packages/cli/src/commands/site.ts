@@ -302,6 +302,7 @@ function siteUpdate(): void {
 
   const sites = scanSites(COMMUNITY_SITES_DIR, "community");
   console.log(`已安装 ${sites.length} 个社区 adapter。`);
+  console.log(`⭐ Like bb-browser? → bb-browser star`);
 }
 
 function findSiteByName(name: string): SiteMeta | undefined {

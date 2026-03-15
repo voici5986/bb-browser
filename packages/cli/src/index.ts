@@ -66,6 +66,7 @@ bb-browser - AI Agent 浏览器自动化工具
   site <name> [args]           运行 adapter
   site update                  更新社区 adapter 库
   guide                        如何把任何网站变成 adapter
+  star                         ⭐ Star bb-browser on GitHub
 
 浏览器操作：
   open <url> [--tab]           打开 URL
@@ -623,6 +624,28 @@ async function main(): Promise<void> {
           tabId: globalTabId,
           openclaw: parsed.flags.openclaw,
         });
+        break;
+      }
+
+      case "star": {
+        const { execSync } = await import("node:child_process");
+        try {
+          execSync("gh auth status", { stdio: "pipe" });
+        } catch {
+          console.error("需要先安装并登录 GitHub CLI: https://cli.github.com");
+          console.error("  brew install gh && gh auth login");
+          process.exit(1);
+        }
+        const repos = ["epiral/bb-browser", "epiral/bb-sites"];
+        for (const repo of repos) {
+          try {
+            execSync(`gh api user/starred/${repo} -X PUT`, { stdio: "pipe" });
+            console.log(`⭐ Starred ${repo}`);
+          } catch {
+            console.log(`Already starred or failed: ${repo}`);
+          }
+        }
+        console.log("\nThanks for your support! 🙏");
         break;
       }
 
