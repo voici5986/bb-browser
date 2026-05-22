@@ -11,6 +11,7 @@
 
 import { parseArgs } from "node:util";
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
@@ -223,11 +224,102 @@ async function discoverCdpPort(host: string, port: number): Promise<{ host: stri
 }
 
 // ---------------------------------------------------------------------------
+// Stale daemon cleanup
+// ---------------------------------------------------------------------------
+
+function readStaleDaemonJson(): DaemonInfo | null {
+  try {
+    const raw = readFileSync(DAEMON_JSON, "utf8");
+    const info = JSON.parse(raw) as DaemonInfo;
+    if (typeof info.pid === "number" && typeof info.host === "string" && typeof info.port === "number" && typeof info.token === "string") {
+      return info;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Shut down any existing stale daemon before we start.
+ * If daemon.json exists and the PID is alive (and it's not us), ask it to
+ * shut down via HTTP, then wait for it to exit. Force-kill as last resort.
+ */
+async function cleanupStaleDaemon(): Promise<void> {
+  const info = readStaleDaemonJson();
+  if (!info) return;
+
+  // If the PID is us, ignore (shouldn't happen, but be safe)
+  if (info.pid === process.pid) return;
+
+  // If the process is dead, just clean up the stale file
+  if (!isProcessAlive(info.pid)) {
+    cleanupDaemonJson();
+    return;
+  }
+
+  console.error(`[Daemon] Found stale daemon (pid ${info.pid}), requesting shutdown...`);
+
+  // Try graceful shutdown via HTTP POST /shutdown
+  try {
+    await new Promise<void>((resolve, _reject) => {
+      const req = httpRequest(
+        {
+          hostname: info.host,
+          port: info.port,
+          path: "/shutdown",
+          method: "POST",
+          headers: { Authorization: `Bearer ${info.token}` },
+          timeout: 3000,
+        },
+        (res) => {
+          res.resume();
+          res.on("end", () => resolve());
+        },
+      );
+      req.on("error", () => resolve()); // Ignore errors, we'll force-kill if needed
+      req.on("timeout", () => { req.destroy(); resolve(); });
+      req.end();
+    });
+  } catch {}
+
+  // Wait for old daemon to exit (up to 5 seconds)
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(info.pid)) {
+      cleanupDaemonJson();
+      console.error("[Daemon] Old daemon exited cleanly");
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  // Force kill
+  console.error(`[Daemon] Force-killing stale daemon (pid ${info.pid})`);
+  try {
+    process.kill(info.pid, "SIGKILL");
+  } catch {}
+  cleanupDaemonJson();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   const options = parseOptions();
+
+  // Clean up any stale daemon before starting
+  await cleanupStaleDaemon();
 
   // Create tab state manager and CDP connection
   const tabManager = new TabStateManager();

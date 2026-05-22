@@ -77,22 +77,6 @@ export async function ensureDaemon(): Promise<void> {
     if (!isProcessAlive(info.pid)) {
       await deleteDaemonJson();
       info = null;
-    } else {
-      try {
-        const status = await httpJson<{ running?: boolean; cdpConnected?: boolean }>("GET", "/status", info, undefined, 2000);
-        if (status.running && status.cdpConnected !== false) {
-          cachedInfo = info;
-          daemonReady = true;
-          return;
-        }
-        if (status.running && status.cdpConnected === false) {
-          await stopDaemon();
-          await deleteDaemonJson();
-          info = null;
-        }
-      } catch {
-        // Daemon process exists but HTTP not responding — fall through to spawn
-      }
     }
   }
 
@@ -106,6 +90,33 @@ export async function ensureDaemon(): Promise<void> {
       "  2. Start Chrome with: google-chrome --remote-debugging-port=9222\n" +
       "  3. Set BB_BROWSER_CDP_URL=http://host:port",
     );
+  }
+
+  // If existing daemon has wrong CDP port, stop it and respawn
+  if (info && info.cdpPort !== cdpInfo.port) {
+    await stopDaemon();
+    info = null;
+    // Fall through to spawn new daemon
+  }
+
+  // If existing daemon is alive and healthy, reuse it
+  if (info) {
+    try {
+      const status = await httpJson<{ running?: boolean; cdpConnected?: boolean }>("GET", "/status", info, undefined, 2000);
+      if (status.running && status.cdpConnected !== false) {
+        cachedInfo = info;
+        daemonReady = true;
+        return;
+      }
+      if (status.running && status.cdpConnected === false) {
+        await stopDaemon();
+        info = null;
+      }
+    } catch {
+      // Daemon process exists but HTTP not responding — stop and respawn
+      await stopDaemon();
+      info = null;
+    }
   }
 
   // Spawn daemon process with discovered CDP endpoint
@@ -166,19 +177,39 @@ export async function daemonCommand(request: Request): Promise<Response> {
 }
 
 /**
- * Stop the daemon via POST /shutdown.
+ * Stop the daemon gracefully, with force-kill fallback.
+ *
+ * 1. Try graceful shutdown via HTTP POST /shutdown
+ * 2. Wait for daemon.json to disappear (daemon cleans it up on exit)
+ * 3. Force-kill if still alive after timeout
  */
 export async function stopDaemon(): Promise<boolean> {
   const info = cachedInfo ?? (await readDaemonJson());
   if (!info) return false;
+
+  daemonReady = false;
+  cachedInfo = null;
+
+  // Try graceful shutdown via HTTP
   try {
-    await httpJson("POST", "/shutdown", info);
-    daemonReady = false;
-    cachedInfo = null;
-    return true;
-  } catch {
-    return false;
+    await httpJson("POST", "/shutdown", info, undefined, 3000);
+  } catch {}
+
+  // Wait for daemon.json to disappear (daemon cleans it up on shutdown)
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (!existsSync(DAEMON_JSON)) return true;
+    await new Promise((r) => setTimeout(r, 200));
   }
+
+  // Force kill if still alive
+  if (isProcessAlive(info.pid)) {
+    try {
+      process.kill(info.pid, "SIGKILL");
+    } catch {}
+  }
+  await deleteDaemonJson();
+  return true;
 }
 
 /**
