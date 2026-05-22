@@ -9,7 +9,6 @@ export default defineConfig({
   entry: {
     cli: "packages/cli/src/index.ts",
     daemon: "packages/daemon/src/index.ts",
-    provider: "bin/bb-browser-provider.ts",
   },
   format: ["esm"],
   dts: false,
