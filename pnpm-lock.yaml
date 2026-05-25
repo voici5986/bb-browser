@@ -115,10 +115,6 @@ importers:
         version: 8.19.0
 
   packages/shared:
-    dependencies:
-      zod:
-        specifier: ^3.24.1
-        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1174,9 +1170,6 @@ packages:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
 
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
-
 snapshots:
 
   '@bufbuild/protobuf@2.11.0': {}
@@ -2104,5 +2097,3 @@ snapshots:
   ws@8.19.0: {}
 
   yocto-queue@0.1.0: {}
-
-  zod@3.25.76: {}

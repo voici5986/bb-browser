@@ -16,11 +16,13 @@ import { mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { DAEMON_PORT, DAEMON_HOST } from "@bb-browser/shared";
 import { HttpServer } from "./http-server.js";
 import { CdpConnection } from "./cdp-connection.js";
 import { TabStateManager } from "./tab-state.js";
 import { HubBridge } from "./hub-bridge.js";
+import { createChromeManager } from "./chrome.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -42,6 +44,7 @@ interface DaemonOptions {
   token: string;
   hubUrl?: string;
   hubToken?: string;
+  noChrome: boolean;
 }
 
 function parseOptions(): DaemonOptions {
@@ -78,6 +81,10 @@ function parseOptions(): DaemonOptions {
         type: "string",
         default: "",
       },
+      "no-chrome": {
+        type: "boolean",
+        default: false,
+      },
       help: {
         type: "boolean",
         short: "h",
@@ -101,6 +108,7 @@ Options:
       --token <token>        Bearer auth token (auto-generated if empty)
       --hub <url>            Pinix Hub gRPC URL (enables Hub mode)
       --hub-token <token>    Pinix Hub auth token
+      --no-chrome            Skip auto Chrome management (use external Chrome)
   -h, --help                 Show this help message
 
 Endpoints:
@@ -142,6 +150,7 @@ Hub mode:
     token,
     hubUrl,
     hubToken: values["hub-token"]?.trim() || undefined,
+    noChrome: values["no-chrome"] ?? false,
   };
 }
 
@@ -321,6 +330,45 @@ async function main(): Promise<void> {
   // Clean up any stale daemon before starting
   await cleanupStaleDaemon();
 
+  // Auto-manage Chrome headless-shell (unless --no-chrome)
+  let chromeProcess: ChildProcess | null = null;
+
+  if (!options.noChrome) {
+    const chrome = createChromeManager();
+
+    // Ensure headless-shell binary is available (download if needed)
+    try {
+      await chrome.ensureBinary();
+    } catch (error) {
+      console.error(`[Daemon] Failed to get headless-shell: ${error instanceof Error ? error.message : String(error)}`);
+      console.error("[Daemon] Falling back to external Chrome. Use --no-chrome to suppress this.");
+    }
+
+    // Check if Chrome is already running on the target port
+    let chromeAlreadyRunning = false;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2000);
+      try {
+        const resp = await fetch(`http://${options.cdpHost}:${options.cdpPort}/json/version`, { signal: controller.signal });
+        chromeAlreadyRunning = resp.ok;
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {}
+
+    if (!chromeAlreadyRunning) {
+      try {
+        chromeProcess = chrome.launch(options.cdpPort);
+        await chrome.waitForCdp(options.cdpHost, options.cdpPort);
+      } catch (error) {
+        console.error(`[Daemon] Failed to launch Chrome: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else {
+      console.error(`[Daemon] Chrome already running on port ${options.cdpPort}`);
+    }
+  }
+
   // Create tab state manager and CDP connection
   const tabManager = new TabStateManager();
   let cdpEndpoint: { host: string; port: number };
@@ -351,6 +399,11 @@ async function main(): Promise<void> {
     }
     cdp.disconnect();
     await httpServer.stop();
+    // Kill managed Chrome process
+    if (chromeProcess && !chromeProcess.killed) {
+      console.error("[Daemon] Stopping managed Chrome");
+      chromeProcess.kill("SIGTERM");
+    }
     cleanupDaemonJson();
     process.exit(0);
   };
