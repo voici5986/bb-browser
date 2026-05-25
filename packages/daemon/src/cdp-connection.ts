@@ -689,11 +689,12 @@ export class CdpConnection {
     // Even full Chrome with --headless=new puts "HeadlessChrome" in the UA.
     // Detect the real version and build a clean UA from it.
     {
-      const versionInfo = await this.sessionCommand<{ product?: string; userAgent?: string }>(
-        targetId, "Browser.getVersion",
+      // Use browser-level command (not session) to get the real product version.
+      const versionInfo = await this.browserCommand<{ product?: string; userAgent?: string }>(
+        "Browser.getVersion",
       ).catch(() => null);
       const product = (versionInfo as any)?.product ?? "";
-      // Extract version number from product string like "HeadlessChrome/148.0.7778.179"
+      // Extract version number from product string like "HeadlessChrome/148.0.7778.179" or "Chrome/148.0.7778.179"
       const versionMatch = String(product).match(/(\d+\.\d+\.\d+\.\d+)/);
       const fullVersion = versionMatch ? versionMatch[1] : "149.0.7827.22";
       const majorVersion = fullVersion.split(".")[0];
