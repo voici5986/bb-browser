@@ -687,62 +687,66 @@ export class CdpConnection {
     await this.sessionCommand(targetId, "DOM.enable").catch(() => {});
     await this.sessionCommand(targetId, "Accessibility.enable").catch(() => {});
 
-    // Stealth: hide headless/automation fingerprints.
-    // Even full Chrome with --headless=new puts "HeadlessChrome" in the UA.
-    // Detect the real version and build a clean UA from it.
+    // Stealth: only apply to headless Chrome.
+    // Full Chrome (headed or --headless=new with system Chrome) should NOT have
+    // stealth injected — Emulation overrides and addScriptToEvaluateOnNewDocument
+    // are themselves detectable by Google and other anti-bot systems.
+    // CDP alone (without stealth) is fine for Google login.
     {
-      // Use browser-level command (not session) to get the real product version.
       const versionInfo = await this.browserCommand<{ product?: string; userAgent?: string }>(
         "Browser.getVersion",
       ).catch(() => null);
-      const product = (versionInfo as any)?.product ?? "";
-      // Extract version number from product string like "HeadlessChrome/148.0.7778.179" or "Chrome/148.0.7778.179"
-      const versionMatch = String(product).match(/(\d+\.\d+\.\d+\.\d+)/);
-      const fullVersion = versionMatch ? versionMatch[1] : "149.0.7827.22";
-      const majorVersion = fullVersion.split(".")[0];
+      const product = String((versionInfo as any)?.product ?? "");
+      const isHeadlessShell = product.startsWith("HeadlessChrome");
 
-      const cleanUA = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${fullVersion} Safari/537.36`;
-      await this.sessionCommand(targetId, "Emulation.setUserAgentOverride", {
-        userAgent: cleanUA,
-        acceptLanguage: "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-        platform: "MacIntel",
-        userAgentMetadata: {
-          brands: [
-            { brand: "Chromium", version: majorVersion },
-            { brand: "Google Chrome", version: majorVersion },
-            { brand: "Not.A/Brand", version: "24" },
-          ],
-          fullVersionList: [
-            { brand: "Chromium", version: fullVersion },
-            { brand: "Google Chrome", version: fullVersion },
-            { brand: "Not.A/Brand", version: "24.0.0.0" },
-          ],
-          platform: "macOS",
-          platformVersion: "10.15.7",
-          architecture: "x86",
-          bitness: "64",
-          model: "",
+      if (isHeadlessShell) {
+        // headless-shell exposes "HeadlessChrome" in UA and has 800x600 screen —
+        // these need to be fixed.
+        const versionMatch = product.match(/(\d+\.\d+\.\d+\.\d+)/);
+        const fullVersion = versionMatch ? versionMatch[1] : "149.0.7827.22";
+        const majorVersion = fullVersion.split(".")[0];
+
+        const cleanUA = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${fullVersion} Safari/537.36`;
+        await this.sessionCommand(targetId, "Emulation.setUserAgentOverride", {
+          userAgent: cleanUA,
+          acceptLanguage: "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+          platform: "MacIntel",
+          userAgentMetadata: {
+            brands: [
+              { brand: "Chromium", version: majorVersion },
+              { brand: "Google Chrome", version: majorVersion },
+              { brand: "Not.A/Brand", version: "24" },
+            ],
+            fullVersionList: [
+              { brand: "Chromium", version: fullVersion },
+              { brand: "Google Chrome", version: fullVersion },
+              { brand: "Not.A/Brand", version: "24.0.0.0" },
+            ],
+            platform: "macOS",
+            platformVersion: "10.15.7",
+            architecture: "x86",
+            bitness: "64",
+            model: "",
+            mobile: false,
+            wow64: false,
+          },
+        }).catch(() => {});
+
+        await this.sessionCommand(targetId, "Emulation.setDeviceMetricsOverride", {
+          width: 1920,
+          height: 1080,
+          deviceScaleFactor: 1,
           mobile: false,
-          wow64: false,
-        },
-      }).catch(() => {});
+          screenWidth: 1920,
+          screenHeight: 1080,
+        }).catch(() => {});
+
+        await this.sessionCommand(targetId, "Page.addScriptToEvaluateOnNewDocument", {
+          source: STEALTH_SCRIPT,
+        }).catch(() => {});
+        await this.evaluate(targetId, STEALTH_SCRIPT, false).catch(() => {});
+      }
     }
-
-    // Fix screen dimensions — headless defaults to 800x600 which is a strong fingerprint.
-    await this.sessionCommand(targetId, "Emulation.setDeviceMetricsOverride", {
-      width: 1920,
-      height: 1080,
-      deviceScaleFactor: 1,
-      mobile: false,
-      screenWidth: 1920,
-      screenHeight: 1080,
-    }).catch(() => {});
-
-    await this.sessionCommand(targetId, "Page.addScriptToEvaluateOnNewDocument", {
-      source: STEALTH_SCRIPT,
-    }).catch(() => {});
-    // Apply to the currently loaded page too
-    await this.evaluate(targetId, STEALTH_SCRIPT, false).catch(() => {});
 
     return result.sessionId;
   }
