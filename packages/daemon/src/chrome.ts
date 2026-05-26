@@ -351,14 +351,14 @@ export function createChromeManager(): ChromeManager {
 
       mkdirSync(userDataDir, { recursive: true });
 
+      const headed = process.env.CHROME_HEADED === "1";
       const args = [
         `--remote-debugging-port=${port}`,
         `--user-data-dir=${userDataDir}`,
         `--window-size=${windowSize}`,
         "--no-first-run",
         "--disable-default-apps",
-        "--headless=new",
-        "--disable-gpu",
+        ...(headed ? [] : ["--headless=new", "--disable-gpu"]),
         "--no-sandbox",
         "about:blank",
       ];
